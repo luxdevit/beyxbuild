@@ -91,6 +91,19 @@ export async function categoryMembers(category: string, limit: number): Promise<
 		.slice(0, limit);
 }
 
+/** Titoli di tutti gli articoli che includono un template (es. `Template:Part Infobox`). */
+export async function embeddedIn(template: string): Promise<string[]> {
+	const responses = await apiGetAll({
+		action: 'query',
+		list: 'embeddedin',
+		eititle: template,
+		einamespace: 0,
+		eilimit: 500
+	});
+
+	return responses.flatMap((r) => r.query.embeddedin.map((p: ApiResponse) => p.title as string));
+}
+
 /** Wikitext delle pagine richieste, a blocchi di 50 titoli (limite dell'API). */
 export async function fetchWikitext(titles: string[]): Promise<Map<string, string>> {
 	const result = new Map<string, string>();

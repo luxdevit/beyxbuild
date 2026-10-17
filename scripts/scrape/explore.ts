@@ -2,24 +2,26 @@
 // quali template (infobox) usano e con quali campi, per decidere cosa estrarre.
 //
 // Uso:
-//   npm run scrape:explore
-//   npm run scrape:explore -- --limit 50
-//   npm run scrape:explore -- --category "Ratchets"
-//   npm run scrape:explore -- --search "Beyblade X"   (elenca solo le categorie)
+//   npm run scrape:explore                              (tutti i pezzi Beyblade X)
+//   npm run scrape:explore -- --category "Ratchets"     (campione di una categoria)
+//   npm run scrape:explore -- --search "Beyblade X"     (elenca solo le categorie)
 //
-// Senza --category esplora le categorie Beyblade X in DEFAULT_CATEGORIES.
+// Di default non parte dalle categorie, che sulla wiki possono essere incomplete:
+// prende tutte le pagine che usano {{Part Infobox}} e tiene quelle con
+// Series "Beyblade X", poi le conta per Classification (Blade, Ratchet, Bit...).
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { categoryMembers, fetchWikitext, searchCategories } from './mediawiki.ts';
+import { categoryMembers, embeddedIn, fetchWikitext, searchCategories } from './mediawiki.ts';
 import { parseTemplates, toPlainText } from './wikitext.ts';
 
 const RAW_DIR = join(import.meta.dirname, '../../data/raw');
 const PAGES_DIR = join(RAW_DIR, 'pages');
 const EXAMPLES_PER_FIELD = 3;
-const DEFAULT_CATEGORIES = ['Beyblade X Parts', 'Ratchets', 'Beyblade X Beyblades'];
+const PART_TEMPLATE = 'Part Infobox';
+const EXAMPLE_TITLES = 5;
 
 const { values: args } = parseArgs({
 	options: {
@@ -53,12 +55,16 @@ async function main() {
 		return;
 	}
 
-	const categories = args.category.length > 0 ? args.category : DEFAULT_CATEGORIES;
+	// 2. Senza --category: tutti i pezzi Beyblade X partendo dal template
+	if (args.category.length === 0) {
+		await exploreParts();
+		return;
+	}
 
-	// 2. Campione di pagine per categoria, con cache su disco
+	// 3. Con --category: campione di pagine per categoria, con cache su disco
 	const report: Record<string, Record<string, TemplateStats>> = {};
 
-	for (const category of categories) {
+	for (const category of args.category) {
 		const titles = await categoryMembers(category, limit);
 		console.log(`\n${category}: ${titles.length} pagine nel campione`);
 
@@ -70,6 +76,79 @@ async function main() {
 	const reportPath = join(RAW_DIR, 'explore-report.json');
 	await writeFile(reportPath, JSON.stringify(report, null, '\t'));
 	console.log(`\nReport completo in ${reportPath}`);
+}
+
+/** Tutte le pagine con {{Part Infobox}}, filtrate per Series e raggruppate per Classification. */
+async function exploreParts() {
+	const titles = await embeddedIn(`Template:${PART_TEMPLATE}`);
+	console.log(`\nPagine che usano {{${PART_TEMPLATE}}}: ${titles.length}`);
+
+	const pages = await loadPages(titles);
+	const xPages = new Map<string, string>();
+	const byClassification: Record<string, string[]> = {};
+	const excludedSeries: Record<string, number> = {};
+	const withoutInfobox: string[] = [];
+	const missingData: string[] = [];
+
+	for (const [title, wikitext] of pages) {
+		// Il template può essere incluso dentro un altro: lo cerchiamo solo al primo livello
+		const infobox = parseTemplates(wikitext).find((t) => t.name === PART_TEMPLATE);
+		if (!infobox) {
+			withoutInfobox.push(title);
+			continue;
+		}
+
+		const series = toPlainText(infobox.params.Series ?? '');
+		if (!/beyblade x/i.test(series)) {
+			const key = series || '(Series vuota)';
+			excludedSeries[key] = (excludedSeries[key] ?? 0) + 1;
+			continue;
+		}
+
+		xPages.set(title, wikitext);
+		const classification = toPlainText(infobox.params.Classification ?? '') || '(vuota)';
+		(byClassification[classification] ??= []).push(title);
+		if (!infobox.params.Weight?.trim() || !infobox.params.AttackStat?.trim()) {
+			missingData.push(title);
+		}
+	}
+
+	console.log('\nEscluse perché non Beyblade X:');
+	for (const [series, count] of sortByCount(excludedSeries)) {
+		console.log(`  ${String(count).padStart(4)}  ${series}`);
+	}
+
+	console.log(`\nPezzi Beyblade X: ${xPages.size}, per Classification:`);
+	for (const [classification, list] of Object.entries(byClassification).sort(
+		([, a], [, b]) => b.length - a.length
+	)) {
+		const examples = list.slice(0, EXAMPLE_TITLES).join(', ');
+		console.log(
+			`  ${String(list.length).padStart(4)}  ${classification.padEnd(16)} es. ${examples}`
+		);
+	}
+
+	if (withoutInfobox.length > 0) {
+		console.log(`\nSenza {{${PART_TEMPLATE}}} al primo livello (${withoutInfobox.length}):`);
+		console.log(`  ${withoutInfobox.join(', ')}`);
+	}
+	if (missingData.length > 0) {
+		console.log(`\nPezzi Beyblade X senza Weight o AttackStat (${missingData.length}):`);
+		console.log(`  ${missingData.join(', ')}`);
+	}
+
+	const fields = summarize(xPages);
+	console.log('\nCampi usati dai pezzi Beyblade X:');
+	printSummary(fields);
+
+	const reportPath = join(RAW_DIR, 'parts-report.json');
+	const report = { byClassification, excludedSeries, withoutInfobox, missingData, fields };
+	await writeFile(reportPath, JSON.stringify(report, null, '\t'));
+	console.log(`\nReport completo, con tutti i titoli, in ${reportPath}`);
+}
+
+function sortByCount(counts: Record<string, number>): [string, number][] {
+	return Object.entries(counts).sort(([, a], [, b]) => b - a);
 }
 
 /** Legge le pagine dalla cache in data/raw/pages, scaricando solo quelle mancanti. */
