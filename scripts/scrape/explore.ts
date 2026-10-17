@@ -3,11 +3,11 @@
 //
 // Uso:
 //   npm run scrape:explore
-//   npm run scrape:explore -- --search "Beyblade X" --limit 10
-//   npm run scrape:explore -- --category "Beyblade X Blades" --category "Ratchets"
+//   npm run scrape:explore -- --limit 50
+//   npm run scrape:explore -- --category "Ratchets"
+//   npm run scrape:explore -- --search "Beyblade X"   (elenca solo le categorie)
 //
-// Senza --category, usa le categorie trovate con --search che contengono
-// Blade, Ratchet o Bit nel nome.
+// Senza --category esplora le categorie Beyblade X in DEFAULT_CATEGORIES.
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -19,10 +19,11 @@ import { parseTemplates, toPlainText } from './wikitext.ts';
 const RAW_DIR = join(import.meta.dirname, '../../data/raw');
 const PAGES_DIR = join(RAW_DIR, 'pages');
 const EXAMPLES_PER_FIELD = 3;
+const DEFAULT_CATEGORIES = ['Beyblade X Parts', 'Ratchets', 'Beyblade X Beyblades'];
 
 const { values: args } = parseArgs({
 	options: {
-		search: { type: 'string', default: 'Beyblade X' },
+		search: { type: 'string' },
 		category: { type: 'string', multiple: true, default: [] },
 		limit: { type: 'string', default: '10' },
 		refresh: { type: 'boolean', default: false }
@@ -43,20 +44,16 @@ interface TemplateStats {
 async function main() {
 	await mkdir(PAGES_DIR, { recursive: true });
 
-	// 1. Categorie
-	console.log(`\nCategorie che corrispondono a "${args.search}":`);
-	const found = await searchCategories(args.search);
-	for (const c of found) console.log(`  ${c.title} (${c.pages} pagine)`);
-
-	const categories =
-		args.category.length > 0
-			? args.category
-			: found.filter((c) => /blade|ratchet|bit/i.test(c.title)).map((c) => c.title);
-
-	if (categories.length === 0) {
-		console.log('\nNessuna categoria da esplorare: passale con --category "Nome".');
+	// 1. Con --search elenchiamo solo le categorie, per sceglierle a mano
+	if (args.search) {
+		console.log(`\nCategorie che corrispondono a "${args.search}":`);
+		for (const c of await searchCategories(args.search)) {
+			console.log(`  ${c.title} (${c.pages} pagine)`);
+		}
 		return;
 	}
+
+	const categories = args.category.length > 0 ? args.category : DEFAULT_CATEGORIES;
 
 	// 2. Campione di pagine per categoria, con cache su disco
 	const report: Record<string, Record<string, TemplateStats>> = {};
