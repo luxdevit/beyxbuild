@@ -13,7 +13,8 @@
 		"lint": "prettier --check . && eslint .",
 		"format": "prettier --write .",
 		"test:unit": "vitest",
-		"test": "npm run test:unit -- --run"
+		"test": "npm run test:unit -- --run",
+		"scrape:explore": "node scripts/scrape/explore.ts"
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
